@@ -22,16 +22,18 @@ class JsonDataDirQuery
     @dir_mtime
   end
   def all
-    dir_mtime = dir.stat.mtime
+    dir_mtime = File.stat(dir.to_s).mtime
     not_just_updated_dir = !just_updated?(dir_mtime)
+    puts "not just updated: #{not_just_updated_dir}"
     puts "existing dir mtime: #{@dir_mtime}"
     puts "new dir mtime: #{dir_mtime}"
 
     dir_has_been_modified = dir_modified?(dir_mtime)
-    puts "dir has been modified: #{dir_has_been_modified}"
+    puts "dir has been modified: #{dir_has_been_modified}" ### fails cos dir modified time isn't updated as soon as file is - it's updated after
 
     updated_cache = false
     items = Dir.glob((dir + '*.json').to_s).map do |f|
+      mtime = File.stat(f).mtime
       if cache? && not_just_updated_dir
         data = dir_cache[f]
         if data.nil? || dir_has_been_modified
@@ -148,6 +150,10 @@ module QueryTests
       first_article_with_mods = all.first.dup
       first_article_with_mods[:date] = '2018-03-02T05:00:00+00:00'
       File.write first_article_path, first_article_with_mods.to_json
+      STDERR.puts "**** wrote revised article date"
+
+      # to allow dir to update after file mod
+      sleep 2
 
       revised_all = query.all_by_date desc: true
 
