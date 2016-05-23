@@ -19,54 +19,32 @@ class JsonDataDirQuery
     @dir = Pathname.new dir_path
     @should_cache = options[:cache]
     @dir_cache = {}
-    @dir_mtime
+    @dir_mtime_cache = {}
   end
   def all
-    dir_mtime = File.stat(dir.to_s).mtime
-    not_just_updated_dir = !just_updated?(dir_mtime)
-    puts "not just updated: #{not_just_updated_dir}"
-    puts "existing dir mtime: #{@dir_mtime}"
-    puts "new dir mtime: #{dir_mtime}"
-
-    dir_has_been_modified = dir_modified?(dir_mtime)
-    puts "dir has been modified: #{dir_has_been_modified}" ### fails cos dir modified time isn't updated as soon as file is - it's updated after
-
-    updated_cache = false
-    items = Dir.glob((dir + '*.json').to_s).map do |f|
-      mtime = File.stat(f).mtime
-      if cache? && not_just_updated_dir
+    check_mtime = true
+    Dir.glob((dir + '*.json').to_s).map do |f|
+      mtime = File.stat(f).mtime if check_mtime
+      if cache?
         data = dir_cache[f]
-        if data.nil? || dir_has_been_modified
+        if data.nil?
+          @dir_mtime_cache[f] = mtime
           data = parse File.read(f)
           dir_cache[f] = data
-          updated_cache = true
+        else
+          if (check_mtime && @dir_mtime_cache[f] != mtime)
+            puts "WOWSERS: #{f}"
+            @dir_mtime_cache[f] = mtime
+            data = parse File.read(f)
+            dir_cache[f] = data
+          end
         end
         data
       else
         parse File.read(f)
       end
     end
-    @dir_mtime = dir_mtime if updated_cache
-    items
   end
-
-  def dir_modified?(dir_mtime)
-    @dir_mtime.nil? || @dir_mtime < dir_mtime
-  end
-
-  def just_updated?(dir_mtime)
-    time_since_dir_updated_ms = (date_to_ms(DateTime.now) - date_to_ms(dir_mtime))
-    puts "time since dir updated: #{time_since_dir_updated_ms}"
-    (time_since_dir_updated_ms < 2000)
-  end
-
-  def date_to_ms(dt)
-    datetime = dt.is_a?(DateTime) ? dt : DateTime.parse(dt.to_s)
-    formatted_date = datetime.strftime('%Q')
-    puts "formatted date: #{formatted_date}, incoming date: #{datetime} of type #{datetime.class}"
-    formatted_date.to_i
-  end
-
 
   def all_by_date(options = { desc: false })
     sorted = all.sort_by {|item|
@@ -111,7 +89,7 @@ end
 
 module QueryTests
 
-  def xtest_fetch_all_data
+  def test_fetch_all_data
     stopwatch 'fetch all data' do
       all = query.all
 
@@ -122,7 +100,7 @@ module QueryTests
     end
   end
 
-  def xtest_orders_by_date
+  def test_orders_by_date
     stopwatch 'fetch all by date' do
       all = query.all_by_date desc: true
 
@@ -149,11 +127,12 @@ module QueryTests
       first_article_path = test_data.single_item_path(all.first[:id])
       first_article_with_mods = all.first.dup
       first_article_with_mods[:date] = '2018-03-02T05:00:00+00:00'
-      File.write first_article_path, first_article_with_mods.to_json
-      STDERR.puts "**** wrote revised article date"
 
-      # to allow dir to update after file mod
-      sleep 2
+      puts "WOOGA: #{first_article_path}"
+
+      File.write first_article_path, first_article_with_mods.to_json
+
+      STDERR.puts "**** wrote revised article date"
 
       revised_all = query.all_by_date desc: true
 
@@ -188,24 +167,24 @@ class JsonTestData
   end
 end
 
-# class TestQueryPerf < Test::Unit::TestCase
-#   include Stopwatch
-#   include Sizeable
-#
-#   attr_reader :query, :test_data
-#
-#   def setup
-#     @test_data = JsonTestData.new
-#     @query = JsonDataDirQuery.new test_data.setup
-#   end
-#
-#   def teardown
-#     size_up query.dir_cache, 'query dir cache'
-#   end
-#
-#   include QueryTests
-#
-# end
+class TestQueryPerf < Test::Unit::TestCase
+  include Stopwatch
+  include Sizeable
+
+  attr_reader :query, :test_data
+
+  def setup
+    @test_data = JsonTestData.new
+    @query = JsonDataDirQuery.new test_data.setup
+  end
+
+  def teardown
+    size_up query.dir_cache, 'query dir cache'
+  end
+
+  include QueryTests
+
+end
 
 class TestQueryWithCachePerf < Test::Unit::TestCase
   include Stopwatch
@@ -217,10 +196,6 @@ class TestQueryWithCachePerf < Test::Unit::TestCase
     @test_data = JsonTestData.new
     STDERR.puts 'with caching:'
     @query = JsonDataDirQuery.new test_data.setup, cache: true
-
-    warm_up_cache
-
-    sleep 2
 
     warm_up_cache
   end
@@ -253,5 +228,6 @@ end
 
 ## file modification times? (copy files in setup)d
 ###  dirs don't get mod times recursively
-###  dir mod times get updated for file change in dir
+###  dir mod times get updated for file change in dir - wrong! must have observed side effect of tools
+###    therefore, need to check file mod times individually
 
